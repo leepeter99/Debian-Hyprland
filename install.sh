@@ -6,6 +6,7 @@ set -e
 # Colors for output
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
+RED='\033[0;31m'
 NC='\033[0m'
 
 echo_step() {
@@ -16,16 +17,20 @@ echo_success() {
     echo -e "${GREEN}==> ${1}${NC}"
 }
 
+echo_error() {
+    echo -e "${RED}==> ${1}${NC}"
+}
+
 # Check if running as root
 if [ "$EUID" -eq 0 ]; then 
-    echo "Please do not run as root"
+    echo_error "Please do not run as root"
     exit 1
 fi
 
 # Install required packages
 echo_step "Installing required packages..."
-sudo nala update
-sudo nala install -y curl wget git xorg build-essential
+sudo apt update
+sudo apt install -y curl wget git xorg build-essential
 
 # Install Nix (Multi-user installation)
 echo_step "Installing Nix (Multi-user)..."
@@ -211,7 +216,8 @@ echo_step "Setting up NVIDIA drivers..."
 sudo apt install -y nvidia-driver
 
 # Create a wrapper script for Hyprland with NVIDIA settings
-cat > ~/.config/hypr/start-hyprland.sh << 'EOF'
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/start-hyprland << 'EOF'
 #!/bin/bash
 
 export LIBVA_DRIVER_NAME=nvidia
@@ -223,16 +229,20 @@ export WLR_RENDERER=vulkan
 
 exec Hyprland
 EOF
-chmod +x ~/.config/hypr/start-hyprland.sh
+chmod +x ~/.local/bin/start-hyprland
 
-# Create SDDM Wayland session
-cat > /usr/share/wayland-sessions/hyprland.desktop << EOF
+# Create Wayland session file with sudo
+echo_step "Creating Wayland session file (requires sudo)..."
+cat > /tmp/hyprland.desktop << EOF
 [Desktop Entry]
 Name=Hyprland
 Comment=An intelligent dynamic tiling Wayland compositor
-Exec=$HOME/.config/hypr/start-hyprland.sh
+Exec=$HOME/.local/bin/start-hyprland
 Type=Application
 EOF
+
+sudo mv /tmp/hyprland.desktop /usr/share/wayland-sessions/hyprland.desktop
+sudo chmod 644 /usr/share/wayland-sessions/hyprland.desktop
 
 # Setup Android development environment
 echo_step "Setting up Android development environment..."
