@@ -3,8 +3,8 @@
 # Install required dependencies
 setup_dependencies() {
     echo "Installing required dependencies..."
-    sudo apt update
-    sudo apt install -y curl git wget xz-utils build-essential
+    sudo nala update
+    sudo nala install -y curl git wget xz-utils build-essential
 }
 
 # Install Nix package manager in multi-user mode
@@ -36,7 +36,7 @@ install_home_manager() {
 # Configure NVIDIA drivers
 setup_nvidia() {
     echo "Setting up NVIDIA drivers..."
-    sudo apt install -y nvidia-driver firmware-misc-nonfree
+    sudo nala install -y nvidia-driver firmware-misc-nonfree
 }
 
 # Create basic flake configuration
