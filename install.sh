@@ -1,155 +1,142 @@
 #!/usr/bin/env bash
 
-# Exit on error
-set -e
+set -euo pipefail
 
 # Colors for output
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
 RED='\033[0;31m'
+GREEN='\033[0;32m'
 NC='\033[0m'
 
-echo_step() {
-    echo -e "${BLUE}==> ${1}${NC}"
+log() {
+    echo -e "${GREEN}[+] $1${NC}"
 }
 
-echo_success() {
-    echo -e "${GREEN}==> ${1}${NC}"
-}
-
-echo_error() {
-    echo -e "${RED}==> ${1}${NC}"
-}
-
-# Check if running as root
-if [ "$EUID" -eq 0 ]; then 
-    echo_error "Please do not run as root"
+error() {
+    echo -e "${RED}[!] $1${NC}"
     exit 1
-fi
+}
+
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        error "Please run as root"
+    fi
+}
+
+# Check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
 
 # Install required packages
-echo_step "Installing required packages..."
-sudo nala update
-sudo nala install -y curl wget git xorg build-essential
+install_prerequisites() {
+    log "Installing prerequisites..."
+    apt-get update
+    apt-get install -y curl xz-utils sudo systemd
 
-# Install Nix (Multi-user installation)
-echo_step "Installing Nix (Multi-user)..."
-sh <(curl -L https://nixos.org/nix/install) --daemon
+    # Install nvidia drivers
+    apt-get install -y nvidia-driver firmware-misc-nonfree
+}
 
-# Source Nix
-. /etc/profile.d/nix.sh
+# Install Nix
+install_nix() {
+    log "Installing Nix (multi-user)..."
+    if ! command_exists nix; then
+        curl -L https://nixos.org/nix/install | sh -s -- --daemon
+        
+        # Source nix
+        . /etc/profile.d/nix.sh
+    else
+        log "Nix is already installed"
+    fi
+}
 
 # Configure Nix
-echo_step "Configuring Nix..."
-mkdir -p ~/.config/nix
-cat > ~/.config/nix/nix.conf << EOF
+configure_nix() {
+    log "Configuring Nix..."
+    mkdir -p /etc/nix
+    cat > /etc/nix/nix.conf << EOF
 experimental-features = nix-command flakes
-max-jobs = auto
 trusted-users = root $USER
+max-jobs = auto
+cores = 0
+sandbox = true
 EOF
+}
 
-# Install Home Manager
-echo_step "Installing Home Manager..."
-nix-channel --add https://github.com/nix-community/home-manager/archive/master.tar.gz home-manager
-nix-channel --update
-nix-shell '<home-manager>' -A install
+# Setup Home Manager
+setup_home_manager() {
+    log "Setting up Home Manager..."
+    nix-channel --add https://github.com/nix-community/home-manager/archive/master.tar.gz home-manager
+    nix-channel --update
+    
+    # Create initial home manager configuration
+    mkdir -p ~/.config/nixpkgs
+    cat > ~/.config/nixpkgs/home.nix << EOF
+{ config, pkgs, ... }:
 
-# Create initial flake configuration
-echo_step "Creating Nix flake configuration..."
-mkdir -p ~/.config/nixpkgs
-cd ~/.config/nixpkgs
-
-# Initialize flake
-cat > flake.nix << 'EOF'
 {
-  description = "Home Manager Configuration";
+  home.username = "$USER";
+  home.homeDirectory = "/home/$USER";
+  home.stateVersion = "23.11";
 
-  inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-    home-manager = {
-      url = "github:nix-community/home-manager";
-      inputs.nixpkgs.follows = "nixpkgs";
+  programs.home-manager.enable = true;
+
+  home.packages = with pkgs; [
+    brave
+    vscode
+    android-studio
+    android-tools
+    flutter
+    git
+    kitty
+    waybar
+    wofi
+    dunst
+  ];
+
+  programs.kitty = {
+    enable = true;
+    theme = "Tokyo Night";
+    settings = {
+      font_family = "JetBrains Mono";
+      font_size = 11;
+      background_opacity = "0.95";
     };
-    hyprland.url = "github:hyprwm/Hyprland";
   };
-
-  outputs = { nixpkgs, home-manager, hyprland, ... }:
-    let
-      system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
-    in {
-      homeConfigurations."$USER" = home-manager.lib.homeManagerConfiguration {
-        inherit pkgs;
-        modules = [
-          hyprland.homeManagerModules.default
-          {
-            home.username = "$USER";
-            home.homeDirectory = "/home/$USER";
-            home.stateVersion = "23.11";
-
-            # Enable home-manager
-            programs.home-manager.enable = true;
-
-            # Enable Hyprland
-            wayland.windowManager.hyprland.enable = true;
-
-            # Install packages
-            home.packages = with pkgs; [
-              # Development tools
-              vscode
-              android-studio
-              flutter
-              android-tools
-              git
-
-              # Browser
-              brave
-
-              # System tools
-              brightnessctl
-              pamixer
-              networkmanagerapplet
-              waybar
-              wofi
-              dunst
-
-              # Terminal
-              kitty
-              zsh
-              oh-my-zsh
-            ];
-          }
-        ];
-      };
-    };
 }
 EOF
+}
 
-# Create initial Hyprland configuration
-mkdir -p ~/.config/hypr
-cat > ~/.config/hypr/hyprland.conf << 'EOF'
+# Setup Hyprland
+setup_hyprland() {
+    log "Setting up Hyprland..."
+    
+    # Create Hyprland configuration directory
+    mkdir -p ~/.config/hypr
+    
+    cat > ~/.config/hypr/hyprland.conf << EOF
 # Monitor configuration
-monitor=,preferred,auto,1
+monitor=eDP-1,1920x1080@60,0x0,1
 
 # Execute at launch
 exec-once = waybar
 exec-once = dunst
-exec-once = nm-applet
+exec-once = hyprpaper
 
-# Some default env vars
-env = XCURSOR_SIZE,24
-env = QT_QPA_PLATFORM,wayland
+# NVIDIA specific
+env = LIBVA_DRIVER_NAME,nvidia
+env = XDG_SESSION_TYPE,wayland
+env = GBM_BACKEND,nvidia-drm
+env = __GLX_VENDOR_LIBRARY_NAME,nvidia
+env = WLR_NO_HARDWARE_CURSORS,1
 
-# Input configuration
+# Basic configuration
 input {
     kb_layout = us
     follow_mouse = 1
-    touchpad {
-        natural_scroll = true
-    }
+    sensitivity = 0 # -1.0 - 1.0, 0 means no modification
 }
 
-# General window layout
 general {
     gaps_in = 5
     gaps_out = 10
@@ -159,23 +146,54 @@ general {
     layout = dwindle
 }
 
+decoration {
+    rounding = 10
+    blur = yes
+    blur_size = 3
+    blur_passes = 1
+    blur_new_optimizations = on
+}
+
+animations {
+    enabled = yes
+    bezier = myBezier, 0.05, 0.9, 0.1, 1.05
+    animation = windows, 1, 7, myBezier
+    animation = windowsOut, 1, 7, default, popin 80%
+    animation = border, 1, 10, default
+    animation = fade, 1, 7, default
+    animation = workspaces, 1, 6, default
+}
+
+dwindle {
+    pseudotile = yes
+    preserve_split = yes
+}
+
+master {
+    new_is_master = true
+}
+
+gestures {
+    workspace_swipe = off
+}
+
 # Window rules
 windowrule = float, ^(pavucontrol)$
-windowrule = float, ^(nm-connection-editor)$
+windowrule = float, ^(blueman-manager)$
 
 # Key bindings
 $mainMod = SUPER
 
-bind = $mainMod, Return, exec, kitty
-bind = $mainMod, Q, killactive
-bind = $mainMod, M, exit
+bind = $mainMod, RETURN, exec, kitty
+bind = $mainMod, Q, killactive, 
+bind = $mainMod, M, exit, 
 bind = $mainMod, E, exec, dolphin
-bind = $mainMod, V, togglefloating
-bind = $mainMod, R, exec, wofi --show drun
-bind = $mainMod, P, pseudo
-bind = $mainMod, J, togglesplit
+bind = $mainMod, V, togglefloating, 
+bind = $mainMod, D, exec, wofi --show drun
+bind = $mainMod, P, pseudo,
+bind = $mainMod, J, togglesplit,
 
-# Move focus with mainMod + arrow keys
+# Move focus
 bind = $mainMod, left, movefocus, l
 bind = $mainMod, right, movefocus, r
 bind = $mainMod, up, movefocus, u
@@ -193,7 +211,7 @@ bind = $mainMod, 8, workspace, 8
 bind = $mainMod, 9, workspace, 9
 bind = $mainMod, 0, workspace, 10
 
-# Move windows to workspaces
+# Move active window to workspace
 bind = $mainMod SHIFT, 1, movetoworkspace, 1
 bind = $mainMod SHIFT, 2, movetoworkspace, 2
 bind = $mainMod SHIFT, 3, movetoworkspace, 3
@@ -205,65 +223,119 @@ bind = $mainMod SHIFT, 8, movetoworkspace, 8
 bind = $mainMod SHIFT, 9, movetoworkspace, 9
 bind = $mainMod SHIFT, 0, movetoworkspace, 10
 EOF
+}
 
-# Install SDDM
-echo_step "Installing SDDM..."
-sudo nala install -y sddm
-sudo systemctl enable sddm
-
-# Configure NVIDIA
-echo_step "Setting up NVIDIA drivers..."
-sudo nala install -y nvidia-driver
-
-# Create a wrapper script for Hyprland with NVIDIA settings
-mkdir -p ~/.local/bin
-cat > ~/.local/bin/start-hyprland << 'EOF'
-#!/bin/bash
-
-export LIBVA_DRIVER_NAME=nvidia
-export XDG_SESSION_TYPE=wayland
-export GBM_BACKEND=nvidia-drm
-export __GLX_VENDOR_LIBRARY_NAME=nvidia
-export WLR_NO_HARDWARE_CURSORS=1
-export WLR_RENDERER=vulkan
-
-exec Hyprland
-EOF
-chmod +x ~/.local/bin/start-hyprland
-
-# Create Wayland session file with sudo
-echo_step "Creating Wayland session file (requires sudo)..."
-cat > /tmp/hyprland.desktop << EOF
+# Setup display manager
+setup_display_manager() {
+    log "Setting up SDDM..."
+    apt-get install -y sddm
+    
+    # Create Wayland session file
+    cat > /usr/share/wayland-sessions/hyprland.desktop << EOF
 [Desktop Entry]
 Name=Hyprland
 Comment=An intelligent dynamic tiling Wayland compositor
-Exec=$HOME/.local/bin/start-hyprland
+Exec=Hyprland
 Type=Application
 EOF
+    
+    chmod 644 /usr/share/wayland-sessions/hyprland.desktop
+    
+    # Enable SDDM
+    systemctl enable sddm
+}
 
-sudo mv /tmp/hyprland.desktop /usr/share/wayland-sessions/hyprland.desktop
-sudo chmod 644 /usr/share/wayland-sessions/hyprland.desktop
+# Create flake configuration
+create_flake() {
+    log "Creating flake configuration..."
+    mkdir -p ~/nixos-config
+    cd ~/nixos-config
+    
+    cat > flake.nix << EOF
+{
+  description = "NixOS configuration with home-manager";
 
-# Setup Android development environment
-echo_step "Setting up Android development environment..."
-cat >> ~/.zshrc << 'EOF'
-# Android SDK
-export ANDROID_HOME=$HOME/Android/Sdk
-export PATH=$PATH:$ANDROID_HOME/tools
-export PATH=$PATH:$ANDROID_HOME/tools/bin
-export PATH=$PATH:$ANDROID_HOME/platform-tools
+  inputs = {
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    home-manager = {
+      url = "github:nix-community/home-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    hyprland.url = "github:hyprwm/Hyprland";
+  };
+
+  outputs = { self, nixpkgs, home-manager, hyprland, ... }@inputs:
+    let
+      system = "x86_64-linux";
+      pkgs = nixpkgs.legacyPackages.\${system};
+    in
+    {
+      nixosConfigurations.default = nixpkgs.lib.nixosSystem {
+        inherit system;
+        modules = [
+          hyprland.nixosModules.default
+          {
+            programs.hyprland = {
+              enable = true;
+              xwayland.enable = true;
+              systemd.enable = true;
+            };
+          }
+          home-manager.nixosModules.home-manager
+          {
+            home-manager.useGlobalPkgs = true;
+            home-manager.useUserPackages = true;
+            home-manager.users.$USER = import ./home.nix;
+          }
+        ];
+      };
+    };
+}
 EOF
 
-# Initialize Nix flake
-echo_step "Initializing Nix flake..."
-cd ~/.config/nixpkgs
-nix flake update
-home-manager switch --flake .#$USER
+    cat > flake.lock << EOF
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1709428628,
+        "narHash": "sha256-//zp2ZnJ6UKwqvAzKH8GvvEv3yQQc80Yzz2E0PQoXq4=",
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "5e871d8aa6f57cc8e0dc087d3bb3608fb3bd8a14",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nixos",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
+EOF
+}
 
-echo_success "Installation complete! Please reboot your system."
-echo "After reboot, select Hyprland session in SDDM and log in."
-echo "Default keybindings:"
-echo "  Super + Return: Open terminal"
-echo "  Super + Q: Close window"
-echo "  Super + R: Open application launcher"
-echo "  Super + M: Exit Hyprland"
+main() {
+    check_root
+    install_prerequisites
+    install_nix
+    configure_nix
+    setup_home_manager
+    setup_hyprland
+    setup_display_manager
+    create_flake
+    
+    log "Setup complete! Please reboot your system."
+    log "After reboot, run 'home-manager switch' to activate your configuration."
+}
+
+main "$@"
