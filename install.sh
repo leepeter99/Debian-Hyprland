@@ -29,8 +29,8 @@ fi
 
 # Install required packages
 echo_step "Installing required packages..."
-sudo apt update
-sudo apt install -y curl wget git xorg build-essential
+sudo nala update
+sudo nala install -y curl wget git xorg build-essential
 
 # Install Nix (Multi-user installation)
 echo_step "Installing Nix (Multi-user)..."
@@ -208,12 +208,12 @@ EOF
 
 # Install SDDM
 echo_step "Installing SDDM..."
-sudo apt install -y sddm
+sudo nala install -y sddm
 sudo systemctl enable sddm
 
 # Configure NVIDIA
 echo_step "Setting up NVIDIA drivers..."
-sudo apt install -y nvidia-driver
+sudo nala install -y nvidia-driver
 
 # Create a wrapper script for Hyprland with NVIDIA settings
 mkdir -p ~/.local/bin
