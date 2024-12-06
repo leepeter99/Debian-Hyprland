@@ -1,188 +1,118 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Install required dependencies
-setup_dependencies() {
-    echo "Installing required dependencies..."
-    sudo nala update
-    sudo nala install -y curl git wget xz-utils build-essential
+# Exit on error
+set -e
+
+# Colors for output
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo_step() {
+    echo -e "${BLUE}==> ${1}${NC}"
 }
 
-# Install Nix package manager in multi-user mode
-install_nix() {
-    echo "Installing Nix in multi-user mode..."
-    sh <(curl -L https://nixos.org/nix/install) --daemon
-
-    # Source Nix
-    . /etc/profile.d/nix.sh
-
-    # Enable flakes and other experimental features system-wide
-    sudo mkdir -p /etc/nix
-    echo "experimental-features = nix-command flakes" | sudo tee -a /etc/nix/nix.conf
-    
-    # Restart nix-daemon to apply changes
-    sudo systemctl restart nix-daemon
+echo_success() {
+    echo -e "${GREEN}==> ${1}${NC}"
 }
+
+# Check if running as root
+if [ "$EUID" -eq 0 ]; then 
+    echo "Please do not run as root"
+    exit 1
+fi
+
+# Install required packages
+echo_step "Installing required packages..."
+sudo nala update
+sudo nala install -y curl wget git xorg build-essential
+
+# Install Nix (Multi-user installation)
+echo_step "Installing Nix (Multi-user)..."
+sh <(curl -L https://nixos.org/nix/install) --daemon
+
+# Source Nix
+. /etc/profile.d/nix.sh
+
+# Configure Nix
+echo_step "Configuring Nix..."
+mkdir -p ~/.config/nix
+cat > ~/.config/nix/nix.conf << EOF
+experimental-features = nix-command flakes
+max-jobs = auto
+trusted-users = root $USER
+EOF
 
 # Install Home Manager
-install_home_manager() {
-    echo "Installing Home Manager..."
-    nix-channel --add https://github.com/nix-community/home-manager/archive/master.tar.gz home-manager
-    nix-channel --update
-    
-    # Install home-manager
-    nix-shell '<home-manager>' -A install
-}
+echo_step "Installing Home Manager..."
+nix-channel --add https://github.com/nix-community/home-manager/archive/master.tar.gz home-manager
+nix-channel --update
+nix-shell '<home-manager>' -A install
 
-# Configure NVIDIA drivers
-setup_nvidia() {
-    echo "Setting up NVIDIA drivers..."
-    sudo nala install -y nvidia-driver firmware-misc-nonfree
-}
+# Create initial flake configuration
+echo_step "Creating Nix flake configuration..."
+mkdir -p ~/.config/nixpkgs
+cd ~/.config/nixpkgs
 
-# Create basic flake configuration
-create_flake_config() {
-    mkdir -p ~/.config/nixpkgs
-    cat > ~/.config/nixpkgs/flake.nix << 'EOF'
+# Initialize flake
+cat > flake.nix << 'EOF'
 {
-  description = "Home Manager configuration";
+  description = "Home Manager Configuration";
 
   inputs = {
-    # Using stable channel for better compatibility
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-23.11";
-    
-    # Home manager
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     home-manager = {
-      url = "github:nix-community/home-manager/release-23.11";
+      url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    
-    # Hyprland
     hyprland.url = "github:hyprwm/Hyprland";
-    
-    # Common flake inputs that you might need
-    flake-utils.url = "github:numtide/flake-utils";
-    rust-overlay = {
-      url = "github:oxalica/rust-overlay";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
-  outputs = { nixpkgs, home-manager, hyprland, flake-utils, rust-overlay, ... }:
+  outputs = { nixpkgs, home-manager, hyprland, ... }:
     let
       system = "x86_64-linux";
-      pkgs = import nixpkgs {
-        inherit system;
-        config = {
-          allowUnfree = true;
-          permittedInsecurePackages = [
-            # Add any needed insecure packages here
-          ];
-        };
-        overlays = [
-          rust-overlay.overlays.default
-        ];
-      };
+      pkgs = nixpkgs.legacyPackages.${system};
     in {
       homeConfigurations."$USER" = home-manager.lib.homeManagerConfiguration {
         inherit pkgs;
         modules = [
           hyprland.homeManagerModules.default
           {
-            home = {
-              username = "$USER";
-              homeDirectory = "/home/$USER";
-              stateVersion = "23.11";
-              
-              # Enable fonts configuration
-              packages = with pkgs; [
-                # Development
-                flutter
-                android-studio
-                vscode
-                git
-                gcc
-                nodejs
-                
-                # Hyprland essentials
-                kitty
-                waybar
-                wofi
-                grim
-                slurp
-                wl-clipboard
-                
-                # System
-                firefox
-                pavucontrol
-                networkmanagerapplet
-                
-                # Fonts
-                (nerdfonts.override { fonts = [ "FiraCode" "JetBrainsMono" ]; })
-              ];
-            };
+            home.username = "$USER";
+            home.homeDirectory = "/home/$USER";
+            home.stateVersion = "23.11";
 
-            programs = {
-              home-manager.enable = true;
-              
-              git = {
-                enable = true;
-                userName = "Your Name";
-                userEmail = "your.email@example.com";
-              };
+            # Enable home-manager
+            programs.home-manager.enable = true;
 
-              kitty = {
-                enable = true;
-                settings = {
-                  font_family = "JetBrainsMono Nerd Font";
-                  font_size = 12;
-                  background_opacity = "0.95";
-                };
-              };
-            };
+            # Enable Hyprland
+            wayland.windowManager.hyprland.enable = true;
 
-            wayland.windowManager.hyprland = {
-              enable = true;
-              settings = {
-                monitor = "eDP-1,1920x1080@60,0x0,1";
-                
-                exec-once = [
-                  "waybar"
-                  "nm-applet --indicator"
-                ];
-                
-                bind = [
-                  "SUPER,Return,exec,kitty"
-                  "SUPER,Q,killactive,"
-                  "SUPER,M,exit,"
-                  "SUPER,Space,togglefloating,"
-                  "SUPER,D,exec,wofi --show drun"
-                  "SUPER,P,pseudo,"
-                  
-                  # Screenshots
-                  "SUPER_SHIFT,S,exec,grim -g \"$(slurp)\" - | wl-copy"
-                ];
-                
-                windowrule = [
-                  "float,^(pavucontrol)$"
-                  "float,^(nm-connection-editor)$"
-                  "float,^(android-studio)$"
-                ];
+            # Install packages
+            home.packages = with pkgs; [
+              # Development tools
+              vscode
+              android-studio
+              flutter
+              android-tools
+              git
 
-                general = {
-                  gaps_in = 5;
-                  gaps_out = 10;
-                  border_size = 2;
-                  "col.active_border" = "rgba(33ccffee)";
-                };
+              # Browser
+              brave
 
-                decoration = {
-                  rounding = 10;
-                  blur = true;
-                  blur_size = 3;
-                  blur_passes = 1;
-                };
-              };
-            };
+              # System tools
+              brightnessctl
+              pamixer
+              networkmanagerapplet
+              waybar
+              wofi
+              dunst
+
+              # Terminal
+              kitty
+              zsh
+              oh-my-zsh
+            ];
           }
         ];
       };
@@ -190,60 +120,140 @@ create_flake_config() {
 }
 EOF
 
-    # Create a shell.nix for development environment
-    cat > ~/.config/nixpkgs/shell.nix << 'EOF'
-{ pkgs ? import <nixpkgs> {} }:
+# Create initial Hyprland configuration
+mkdir -p ~/.config/hypr
+cat > ~/.config/hypr/hyprland.conf << 'EOF'
+# Monitor configuration
+monitor=,preferred,auto,1
 
-pkgs.mkShell {
-  buildInputs = with pkgs; [
-    flutter
-    android-studio
-    jdk17
-    cmake
-    ninja
-    pkg-config
-    gtk3
-    pcre
-    dbus
-    xorg.libX11
-    xorg.libXcursor
-    xorg.libXrandr
-    xorg.libXi
-  ];
+# Execute at launch
+exec-once = waybar
+exec-once = dunst
+exec-once = nm-applet
 
-  shellHook = ''
-    export CHROME_EXECUTABLE=${pkgs.google-chrome}/bin/google-chrome
-  '';
+# Some default env vars
+env = XCURSOR_SIZE,24
+env = QT_QPA_PLATFORM,wayland
+
+# Input configuration
+input {
+    kb_layout = us
+    follow_mouse = 1
+    touchpad {
+        natural_scroll = true
+    }
 }
+
+# General window layout
+general {
+    gaps_in = 5
+    gaps_out = 10
+    border_size = 2
+    col.active_border = rgba(33ccffee)
+    col.inactive_border = rgba(595959aa)
+    layout = dwindle
+}
+
+# Window rules
+windowrule = float, ^(pavucontrol)$
+windowrule = float, ^(nm-connection-editor)$
+
+# Key bindings
+$mainMod = SUPER
+
+bind = $mainMod, Return, exec, kitty
+bind = $mainMod, Q, killactive
+bind = $mainMod, M, exit
+bind = $mainMod, E, exec, dolphin
+bind = $mainMod, V, togglefloating
+bind = $mainMod, R, exec, wofi --show drun
+bind = $mainMod, P, pseudo
+bind = $mainMod, J, togglesplit
+
+# Move focus with mainMod + arrow keys
+bind = $mainMod, left, movefocus, l
+bind = $mainMod, right, movefocus, r
+bind = $mainMod, up, movefocus, u
+bind = $mainMod, down, movefocus, d
+
+# Switch workspaces
+bind = $mainMod, 1, workspace, 1
+bind = $mainMod, 2, workspace, 2
+bind = $mainMod, 3, workspace, 3
+bind = $mainMod, 4, workspace, 4
+bind = $mainMod, 5, workspace, 5
+bind = $mainMod, 6, workspace, 6
+bind = $mainMod, 7, workspace, 7
+bind = $mainMod, 8, workspace, 8
+bind = $mainMod, 9, workspace, 9
+bind = $mainMod, 0, workspace, 10
+
+# Move windows to workspaces
+bind = $mainMod SHIFT, 1, movetoworkspace, 1
+bind = $mainMod SHIFT, 2, movetoworkspace, 2
+bind = $mainMod SHIFT, 3, movetoworkspace, 3
+bind = $mainMod SHIFT, 4, movetoworkspace, 4
+bind = $mainMod SHIFT, 5, movetoworkspace, 5
+bind = $mainMod SHIFT, 6, movetoworkspace, 6
+bind = $mainMod SHIFT, 7, movetoworkspace, 7
+bind = $mainMod SHIFT, 8, movetoworkspace, 8
+bind = $mainMod SHIFT, 9, movetoworkspace, 9
+bind = $mainMod SHIFT, 0, movetoworkspace, 10
 EOF
-}
 
+# Install SDDM
+echo_step "Installing SDDM..."
+sudo apt install -y sddm
+sudo systemctl enable sddm
 
-# Main setup function
-main() {
-    setup_dependencies
-    install_nix
-    install_home_manager
-    setup_nvidia
-    create_flake_config
-    setup_bash
-    
-    echo "Multi-user Nix installation completed! Please log out and log back in."
-    echo ""
-    echo "After logging back in:"
-    echo "1. Run 'home-manager switch' to apply the configuration"
-    echo "2. Edit ~/.config/nixpkgs/flake.nix to customize your setup"
-    echo "3. Update git config in the flake with your details"
-    echo ""
-    echo "Useful commands:"
-    echo "- nix-cleanup : Clean up unused packages"
-    echo "- flake-update : Update flake inputs"
-    echo "- nix-dev : Enter development shell"
-    echo ""
-    echo "To run other developers' flakes:"
-    echo "nix develop github:username/repo"
-    echo "nix run github:username/repo"
-}
+# Configure NVIDIA
+echo_step "Setting up NVIDIA drivers..."
+sudo apt install -y nvidia-driver
 
-# Run main setup
-main
+# Create a wrapper script for Hyprland with NVIDIA settings
+cat > ~/.config/hypr/start-hyprland.sh << 'EOF'
+#!/bin/bash
+
+export LIBVA_DRIVER_NAME=nvidia
+export XDG_SESSION_TYPE=wayland
+export GBM_BACKEND=nvidia-drm
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export WLR_NO_HARDWARE_CURSORS=1
+export WLR_RENDERER=vulkan
+
+exec Hyprland
+EOF
+chmod +x ~/.config/hypr/start-hyprland.sh
+
+# Create SDDM Wayland session
+cat > /usr/share/wayland-sessions/hyprland.desktop << EOF
+[Desktop Entry]
+Name=Hyprland
+Comment=An intelligent dynamic tiling Wayland compositor
+Exec=$HOME/.config/hypr/start-hyprland.sh
+Type=Application
+EOF
+
+# Setup Android development environment
+echo_step "Setting up Android development environment..."
+cat >> ~/.zshrc << 'EOF'
+# Android SDK
+export ANDROID_HOME=$HOME/Android/Sdk
+export PATH=$PATH:$ANDROID_HOME/tools
+export PATH=$PATH:$ANDROID_HOME/tools/bin
+export PATH=$PATH:$ANDROID_HOME/platform-tools
+EOF
+
+# Initialize Nix flake
+echo_step "Initializing Nix flake..."
+cd ~/.config/nixpkgs
+nix flake update
+home-manager switch --flake .#$USER
+
+echo_success "Installation complete! Please reboot your system."
+echo "After reboot, select Hyprland session in SDDM and log in."
+echo "Default keybindings:"
+echo "  Super + Return: Open terminal"
+echo "  Super + Q: Close window"
+echo "  Super + R: Open application launcher"
+echo "  Super + M: Exit Hyprland"
