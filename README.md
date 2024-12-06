@@ -1,7 +1,7 @@
 git clone
 
-chmod +x ./install.sh
+chmod +x ./setup.sh
 
 
 run as root
-sudo ./install.sh
+sudo ./setup.sh
