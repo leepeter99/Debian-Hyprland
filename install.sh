@@ -218,32 +218,6 @@ pkgs.mkShell {
 EOF
 }
 
-# Setup custom bash configuration with Nix support
-setup_bash() {
-    echo "Setting up custom bash configuration..."
-    wget -O ~/.bashrc https://raw.githubusercontent.com/ChrisTitusTech/mybash/main/.bashrc
-    
-    # Add Nix and flakes aliases
-    cat >> ~/.bashrc << 'EOF'
-
-# Nix-specific aliases and functions
-alias nrs='nixos-rebuild switch'
-alias hms='home-manager switch'
-alias nsp='nix-shell -p'
-alias nix-cleanup='nix-collect-garbage -d && sudo nix-collect-garbage -d'
-
-# Flakes shortcuts
-alias flake-update='nix flake update'
-alias flake-check='nix flake check'
-
-# Development environment
-function nix-dev() {
-    nix-shell ~/.config/nixpkgs/shell.nix
-}
-EOF
-    
-    source ~/.bashrc
-}
 
 # Main setup function
 main() {
